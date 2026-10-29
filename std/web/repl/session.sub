@@ -1,9 +1,9 @@
 ;; The REPL's compiler half, which the page runs as a worker. Each input arrives as a message of a four-byte id and
 ;; the text, and each answer is a byte, 1 for a failure, followed by the error.
-(require-unqualified macros "../../../compiler/macros.sub")
-(require-unqualified ex "../../../compiler/expander.sub")
-(require-unqualified worker "../../../host/worker.sub")
-(require-unqualified events "../../../host/events.sub")
+(require-unqualified macros compiler/macros)
+(require-unqualified ex compiler/expander)
+(require-unqualified worker host/worker)
+(require-unqualified events host/events)
 
 (provide session-serve!)
 
@@ -16,7 +16,6 @@
   (event-handler! worker-source on-message)
   (trap-handler! session-trapped)
   (set-repository-root! `"/src")
-  (set-package-root! `"/src")
   (install-core!)
   (session-open! `"repl"))
 
