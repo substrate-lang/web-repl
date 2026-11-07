@@ -16,7 +16,6 @@
   (set! input (make-buffer))
   (event-handler! worker-source on-message)
   (trap-handler! session-trapped)
-  (use-compiled-modules!)
   (session-open! `"repl"))
 
 (define (reply! [failed bool] [error datum])
