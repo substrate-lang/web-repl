@@ -2,9 +2,9 @@
 ;; the text, and each answer is a byte, 1 for a failure, followed by the error.
 (require-unqualified compiler/macros)
 (require-unqualified compiler/expander)
-(require-unqualified compiler/roots)
 (require-unqualified host/worker)
 (require-unqualified host/events)
+(runtime-require scheme bend)
 
 (provide session-serve!)
 
@@ -16,12 +16,8 @@
   (set! input (make-buffer))
   (event-handler! worker-source on-message)
   (trap-handler! session-trapped)
-  (set-toolchain-directory! `"/src/substrate")
   (install-core!)
-  (set-module-map-text! `"(uses (std std) (scheme scheme) (bend bend)) (root std \"/src/std\")
-                          (root scheme \"/src/packages/scheme\" (uses (nodes nodes)))
-                          (root bend \"/src/packages/bend\" (uses (nodes nodes))) (root nodes \"/src/packages/nodes\")"
-                        `"the REPL")
+  (use-compiled-modules!)
   (session-open! `"repl"))
 
 (define (reply! [failed bool] [error datum])
