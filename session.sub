@@ -4,7 +4,7 @@
 (require-unqualified compiler/expander)
 (require-unqualified host/worker)
 (require-unqualified host/events)
-(runtime-require scheme bend)
+(runtime-require scheme bend2)
 
 (provide session-serve!)
 

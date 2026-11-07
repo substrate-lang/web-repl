@@ -146,7 +146,7 @@
   (case language
     [(0) "(language scheme)"]
     [(1) "(language compiler/substrate)"]
-    [(2) "(language bend)"]
+    [(2) "(language bend2)"]
     [else ""]))
 
 (define (language-query [language u32]) -> string
