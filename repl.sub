@@ -122,7 +122,7 @@
     (free (-> (+ (-> m history) i) input bytes)))
   (set! (-> m history-count) 0))
 
-;; The session runs the compiler half on a worker, with the sources under /src.
+;; The session runs the compiler half on a worker.
 (define (session-main) (session-serve!))
 
 (define (start-worker! [m (ptr model)])

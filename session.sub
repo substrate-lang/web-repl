@@ -16,7 +16,6 @@
   (set! input (make-buffer))
   (event-handler! worker-source on-message)
   (trap-handler! session-trapped)
-  (install-core!)
   (use-compiled-modules!)
   (session-open! `"repl"))
 
@@ -42,5 +41,4 @@
 (define (session-trapped [why string])
   (when evaluating
     (set! evaluating #f)
-    (reply! #t (trap-report why))
-    (session-recover!)))
+    (reply! #t (trap-report why))))
