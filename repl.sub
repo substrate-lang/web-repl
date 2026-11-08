@@ -129,11 +129,11 @@
   (free (-> m problem bytes))
   (set! (-> m problem) "")
   (set! (-> m started) #f)
-  (let ([o worker-options] [why string])
+  (let ([o worker-options] [why error])
     (worker-options-init! (& o))
     (set! (-> o output) #t)
-    (set! (-> m session) (worker-start session-main (cast (slice u8) "") (& o) 0 (& why)))
-    (set! (-> m problem) why)))
+    (worker-start session-main (cast (slice u8) "") (& o) 0 (& (-> m session)) (& why))
+    (set! (-> m problem) (error-text (& why)))))
 
 (define (evaluate! [m (ptr model)] [input string])
   (let* ([i (add-entry! m input)] [e (+ (-> m entries) i)])
@@ -228,8 +228,8 @@
     (buffer-free! (& b))))
 
 (define (copy! [m (ptr model)])
-  (let ([b (transcript m #t)])
-    (clipboard-write (buffer-string (& b)) 0 0)
+  (let ([b (transcript m #t)] [id u32 0])
+    (clipboard-write (buffer-string (& b)) 0 (& id) 0)
     (buffer-free! (& b))))
 
 (define (start-session! [m (ptr model)] [language u32])
@@ -389,7 +389,7 @@
     [stop (stop! m)]
     [clear (unless (busy? m) (clear! m))]
     [save (save! m)]
-    [load (files-pick #f "" 0 0)]
+    [load (let ([id u32 0]) (files-pick #f "" 0 (& id) 0))]
     [loaded
      (load-forms! m (buffer-string (& (-> loading bytes))))
      (buffer-free! (& (-> loading bytes)))]
