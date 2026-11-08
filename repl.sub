@@ -126,14 +126,14 @@
 (define (session-main) (session-serve!))
 
 (define (start-worker! [m (ptr model)])
-  (free (-> m problem bytes))
+  (when (> (-> m problem length) 0) (free (-> m problem bytes)))
   (set! (-> m problem) "")
   (set! (-> m started) #f)
   (let ([o worker-options] [why error])
     (worker-options-init! (& o))
     (set! (-> o output) #t)
-    (worker-start session-main (cast (slice u8) "") (& o) 0 (& (-> m session)) (& why))
-    (set! (-> m problem) (error-text (& why)))))
+    (unless (worker-start session-main (cast (slice u8) "") (& o) 0 (& (-> m session)) (& why))
+      (set! (-> m problem) (error-text (& why))))))
 
 (define (evaluate! [m (ptr model)] [input string])
   (let* ([i (add-entry! m input)] [e (+ (-> m entries) i)])
@@ -228,8 +228,8 @@
     (buffer-free! (& b))))
 
 (define (copy! [m (ptr model)])
-  (let ([b (transcript m #t)] [id u32 0])
-    (clipboard-write (buffer-string (& b)) 0 (& id) 0)
+  (let ([b (transcript m #t)])
+    (clipboard-write (buffer-string (& b)) 0 0 0)
     (buffer-free! (& b))))
 
 (define (start-session! [m (ptr model)] [language u32])
@@ -261,7 +261,7 @@
   (if (> (-> m failed-starts) 2)
       (begin
         (set! (-> m session) 0)
-        (free (-> m problem bytes))
+        (when (> (-> m problem length) 0) (free (-> m problem bytes)))
         (set! (-> m problem) (string-copy why)))
       (begin
         (start-worker! m)
@@ -389,7 +389,7 @@
     [stop (stop! m)]
     [clear (unless (busy? m) (clear! m))]
     [save (save! m)]
-    [load (let ([id u32 0]) (files-pick #f "" 0 (& id) 0))]
+    [load (files-pick #f "" 0 0 0)]
     [loaded
      (load-forms! m (buffer-string (& (-> loading bytes))))
      (buffer-free! (& (-> loading bytes)))]
@@ -401,7 +401,14 @@
   (let ([e message (worker-event g kind)])
     (send! (& e))))
 
-(define (trapped [m (ptr model)] [why string]) (+= (-> m focus) 1))
+(define (trapped [m (ptr model)] [why string])
+  (let ([b (make-buffer)])
+    (buffer-add-string! (& b) "error: ")
+    (buffer-add-string! (& b) why)
+    (buffer-add-byte! (& b) 10)
+    (host-write 2 (buffer-bytes (& b)))
+    (buffer-free! (& b)))
+  (+= (-> m focus) 1))
 
 (define (storage-heard [source u32] [kind u32] [id u32] [tag (ptr void)] [value i32])
   (when (and (== kind storage-got) (== value 1))
