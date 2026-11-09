@@ -1,0 +1,43 @@
+;; The REPL page: the REPL in the page's root element, starting in the language its URL names. The URL follows the
+;; language chosen.
+(require-unqualified web-ui)
+(require-unqualified host/web/location)
+(require-unqualified "repl.sub")
+
+(struct page-state [language u32])
+
+(variant page-message [chosen [language u32]])
+
+(define (starts? [s string] [prefix string]) -> bool
+  (and (>= (-> s length) (-> prefix length)) (== (slice s 0 (-> prefix length)) prefix)))
+
+(define (language-in [url string]) -> u32
+  (for ([i u32 0]) (< i (-> url length)) (+= i 1)
+    (when (starts? (slice url i) "language=")
+      (let ([at (slice url (+ i 9))])
+        (return (cond [(starts? at "substrate") 1] [(starts? at "bend") 2] [else 0])))))
+  0)
+
+(define (language-query [language u32]) -> string
+  (case language
+    [(1) "?language=substrate"]
+    [(2) "?language=bend"]
+    [else "?language=scheme"]))
+
+(define (page-init [s (ptr page-state)])
+  (let ([url (location-get)])
+    (set! (-> s language) (language-in url))
+    (free (-> url bytes))))
+
+(define (page-update [s (ptr page-state)] [e (ptr page-message)])
+  (match e
+    [(chosen language) (location-replace (language-query language) 0)]))
+
+(component (repl-page)
+  #:state [s page-state]
+  #:messages page-message
+  #:update page-update
+  #:init page-init
+  (repl ([language (-> s language)] [on language-changed chosen])))
+
+(attach ["root" (repl-page)])

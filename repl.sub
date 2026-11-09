@@ -1,12 +1,13 @@
-;; The REPL web page: the half the user sees.
-(require-unqualified web-ui/web)
+;; The REPL as a component: the half the user sees.
+(require-unqualified web-ui)
 (require-unqualified host/worker)
 (require-unqualified "session.sub")
 (require-unqualified host/stream)
 (require-unqualified host/web/storage)
-(require-unqualified host/web/location)
 (require-unqualified host/web/clipboard)
 (require-unqualified host/web/files)
+
+(provide repl repl-event language-changed)
 
 ;; ---- data ----
 
@@ -29,29 +30,29 @@
   [failed-starts u32]
   [history (ptr history-item)] [history-count u32] [history-capacity u32]
   [queue (ptr string)] [queued u32] [queue-at u32] [queue-capacity u32]
-  [problem string])
+  [problem string]
+  [worker-tag (ptr void)] [picking (ptr void)] [reading (ptr void)]
+  [file-stream u32] [file buffer] [chunk (array u8 4096)])
 
 (variant message
   [draft-changed [text string]]
   [draft-kept [text string]]
   [key-pressed [key string] [shift bool]]
-  [run] [stop] [clear] [save] [load] [loaded] [copy]
+  [run] [stop] [clear] [save] [load] [copy]
+  [file-picked [kind u32] [value i32]]
+  [file-read [kind u32] [value i32]]
   [use [language u32]]
   [worker-event [w u32] [kind u32]])
-(messages message)
 
-(define loading stream-reader)
+(variant repl-event [language-changed [language u32]])
 
 ;; ---- small helpers ----
-
-(define (starts? [s string] [prefix string]) -> bool
-  (and (>= (-> s length) (-> prefix length)) (== (slice s 0 (-> prefix length)) prefix)))
 
 (define (set-draft! [m (ptr model)] [s string])
   (let ([new (string-copy s)])
     (free (-> m draft bytes))
     (set! (-> m draft) new)
-    (storage-set-text "draft" new 0)))
+    (storage-set-text "repl-draft" new 0)))
 
 (define (busy? [m (ptr model)]) -> bool (or (>= (-> m pending) 0) (> (-> m replaying) 0)))
 
@@ -125,15 +126,22 @@
 ;; The session runs the compiler half on a worker.
 (define (session-main) (session-serve!))
 
+(define (worker-heard [source u32] [kind u32] [g u32] [tag (ptr void)] [value i32]) (send! (worker-event g kind)))
+
+;; Each worker's events come through a subscription of its own, which the next worker's start ends.
 (define (start-worker! [m (ptr model)])
   (when (> (-> m problem length) 0) (free (-> m problem bytes)))
   (set! (-> m problem) "")
   (set! (-> m started) #f)
+  (when (!= (-> m worker-tag) 0) (unsubscribe! (-> m worker-tag)))
+  (set! (-> m worker-tag) (subscribe! worker-heard))
   (let ([o worker-options] [why error])
     (worker-options-init! (& o))
     (set! (-> o output) #t)
-    (unless (worker-start session-main (cast (slice u8) "") (& o) 0 (& (-> m session)) (& why))
-      (set! (-> m problem) (error-text (& why))))))
+    (unless (worker-start session-main (cast (slice u8) "") (& o) (-> m worker-tag) (& (-> m session)) (& why))
+      (set! (-> m problem) (error-text (& why)))
+      (unsubscribe! (-> m worker-tag))
+      (set! (-> m worker-tag) 0))))
 
 (define (evaluate! [m (ptr model)] [input string])
   (let* ([i (add-entry! m input)] [e (+ (-> m entries) i)])
@@ -148,19 +156,6 @@
     [(1) "(language compiler/substrate)"]
     [(2) "(language bend2)"]
     [else ""]))
-
-(define (language-query [language u32]) -> string
-  (case language
-    [(1) "?language=substrate"]
-    [(2) "?language=bend"]
-    [else "?language=scheme"]))
-
-(define (language-in [url string]) -> u32
-  (for ([i u32 0]) (< i (-> url length)) (+= i 1)
-    (when (starts? (slice url i) "language=")
-      (let ([at (slice url (+ i 9))])
-        (return (cond [(starts? at "substrate") 1] [(starts? at "bend") 2] [else 0])))))
-  0)
 
 ;; ---- inputs from a file ----
 
@@ -197,12 +192,33 @@
     (buffer-free! (& form))
     (evaluate-next! m)))
 
-(define (file-read [r (ptr stream-reader)])
-  (let ([e message loaded])
-    (send! (& e))))
+;; A picked file is read through two subscriptions: one for the pick's events, one for the file's stream.
+(define (files-heard [source u32] [kind u32] [id u32] [tag (ptr void)] [value i32]) (send! (file-picked kind value)))
 
-(define (files-heard [source u32] [kind u32] [id u32] [tag (ptr void)] [value i32])
-  (when (== kind files-file) (stream-read-all! (& loading) (cast u32 value) file-read)))
+(define (chunk-heard [source u32] [kind u32] [id u32] [tag (ptr void)] [value i32]) (send! (file-read kind value)))
+
+(define (picked! [m (ptr model)] [kind u32] [value i32])
+  (if (== kind files-file)
+      (let ([stream (cast u32 value)])
+        (set! (-> m file-stream) stream)
+        (set! (-> m file) (make-buffer))
+        (set! (-> m reading) (subscribe! chunk-heard))
+        (stream-tag! stream (-> m reading))
+        (stream-read! stream (slice (-> m chunk))))
+      (begin
+        (unsubscribe! (-> m picking))
+        (set! (-> m picking) 0))))
+
+(define (read! [m (ptr model)] [kind u32] [value i32])
+  (if (and (== kind stream-read) (> value 0))
+      (begin
+        (buffer-add! (& (-> m file)) (slice (-> m chunk) (cast u32 value)))
+        (stream-read! (-> m file-stream) (slice (-> m chunk))))
+      (begin
+        (unsubscribe! (-> m reading))
+        (set! (-> m reading) 0)
+        (when (== kind stream-read) (load-forms! m (buffer-string (& (-> m file)))))
+        (buffer-free! (& (-> m file))))))
 
 ;; ---- the session as text ----
 
@@ -237,7 +253,6 @@
   (clear! m)
   (forget-history! m)
   (drop-queue! m)
-  (location-replace (language-query language) 0)
   (set! (-> m language) language)
   (set! (-> m pending) -1)
   (set! (-> m replaying) 0)
@@ -389,17 +404,16 @@
     [stop (stop! m)]
     [clear (unless (busy? m) (clear! m))]
     [save (save! m)]
-    [load (files-pick #f "" 0 0 0)]
-    [loaded
-     (load-forms! m (buffer-string (& (-> loading bytes))))
-     (buffer-free! (& (-> loading bytes)))]
+    [load
+     (when (== (-> m picking) 0) (set! (-> m picking) (subscribe! files-heard)))
+     (files-pick #f "" (-> m picking) 0 0)]
+    [(file-picked kind value) (picked! m kind value)]
+    [(file-read kind value) (read! m kind value)]
     [copy (copy! m)]
-    [(use language) (start-session! m language)]
+    [(use language)
+     (start-session! m language)
+     (emit! (language-changed language))]
     [(worker-event g kind) (handle-worker-event! m g kind)]))
-
-(define (worker-heard [source u32] [kind u32] [g u32] [tag (ptr void)] [value i32])
-  (let ([e message (worker-event g kind)])
-    (send! (& e))))
 
 (define (trapped [m (ptr model)] [why string])
   (let ([b (make-buffer)])
@@ -410,52 +424,84 @@
     (buffer-free! (& b)))
   (+= (-> m focus) 1))
 
-(define (storage-heard [source u32] [kind u32] [id u32] [tag (ptr void)] [value i32])
+(define (draft-heard [source u32] [kind u32] [id u32] [tag (ptr void)] [value i32])
   (when (and (== kind storage-got) (== value 1))
-    (let* ([text (events-take-text)] [e message (draft-kept text)])
-      (send! (& e))
+    (let ([text (events-take-text)])
+      (send! (draft-kept text))
       (free (-> text bytes)))))
 
-(define (init [m (ptr model)])
-  (event-handler! worker-source worker-heard)
-  (event-handler! files-source files-heard)
-  (event-handler! storage-source storage-heard)
+(define (init [m (ptr model)] [language u32])
   (set! (-> m draft) (string-copy ""))
-  (storage-get "draft" 0)
-  (let ([url (location-get)])
-    (start-session! m (language-in url))
-    (free (-> url bytes))))
+  (storage-get "repl-draft" (request! draft-heard))
+  (start-session! m language))
 
-;; ---- what the page looks like ----
+;; ---- what it looks like ----
+
+(define style string
+  ".repl { --ground: #fbfaf7; --ink: #1c1b18; --faint: #6b675e; --line: #dedad0; --input: #f1eee6; --accent: #2f5d50;
+  --failed: #a3341f; --mono: ui-monospace, \"SF Mono\", Menlo, Consolas, monospace;
+  display: flex; flex-direction: column; height: 100%; box-sizing: border-box;
+  background: var(--ground); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
+@media (prefers-color-scheme: dark) {
+  .repl { --ground: #171613; --ink: #e9e5da; --faint: #9a9588; --line: #34322c; --input: #211f1b; --accent: #8fc7b3;
+          --failed: #f08c74; }
+}
+.repl * { box-sizing: border-box; }
+.repl nav { display: flex; gap: 0.5rem; flex-wrap: wrap; padding-bottom: 0.75rem; border-bottom: 1px solid var(--line); }
+.repl button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line);
+  border-radius: 4px; padding: 0.2rem 0.7rem; cursor: pointer; }
+.repl button:hover { border-color: var(--accent); color: var(--accent); }
+.repl button:disabled { color: var(--faint); border-color: var(--line); cursor: default; opacity: 0.6; }
+.repl button.stop { border-color: var(--failed); color: var(--failed); }
+.repl button.quiet { margin-left: auto; color: var(--faint); }
+.repl main { flex: 1; overflow-y: auto; padding: 0.75rem 0; }
+.repl section.entry { padding: 0.35rem 0 0.35rem 0.75rem; border-left: 2px solid var(--line); margin: 0.5rem 0; }
+.repl section.entry.failed { border-left-color: var(--failed); }
+.repl section.entry.running { border-left-color: var(--accent); animation: repl-running 1.2s ease-in-out infinite; }
+@keyframes repl-running { 50% { border-left-color: var(--line); } }
+@media (prefers-reduced-motion: reduce) { .repl section.entry.running { animation: none; } }
+.repl p.status { margin: 0.5rem 0; color: var(--faint); font-size: 0.9rem; }
+.repl p.problem { color: var(--failed); }
+.repl pre { font: 13.5px/1.5 var(--mono); margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.repl pre.input { color: var(--accent); }
+.repl pre.output { margin-top: 0.15rem; }
+.repl .failed pre.output { color: var(--failed); }
+.repl footer { display: flex; gap: 0.5rem; align-items: flex-end; padding: 0.75rem 0 0; border-top: 1px solid var(--line); }
+.repl textarea { flex: 1; font: 13.5px/1.5 var(--mono); color: var(--ink); background: var(--input);
+  border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem 0.6rem; resize: vertical; }
+.repl textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }")
 
 (view (entry-view [e (ptr entry)])
   (section ([class (if (-> e running) "entry running" (if (-> e failed) "entry failed" "entry"))])
     (pre ([class "input"]) (text (-> e input)))
     (when (> (-> e output length) 0) (pre ([class "output"]) (text (buffer-string (& (-> e output))))))))
 
-(view (repl [m (ptr model)])
-  (header
-    (h1 "substrate")
-    (p "Type an expression or a definition and press Enter. It is compiled and run in your browser, in a sandboxed worker beside this page. Each button below starts a new session in that language.")
+(component (repl [language u32])
+  #:state [m model]
+  #:messages message
+  #:update update
+  #:init init
+  #:events repl-event
+  #:trapped trapped
+  #:style style
+  (div ([class "repl"])
     (nav
       (button ([on click (use 0)]) "Scheme")
       (button ([on click (use 1)]) "Substrate")
       (button ([on click (use 2)]) "Bend")
       (button ([class "quiet"] [disabled (busy? m)] [on click clear]) "clear")
-      (button ([id "save"] [class "quiet"] [on click save]) "save")
-      (button ([id "load"] [class "quiet"] [disabled (busy? m)] [on click load]) "load")
-      (button ([id "copy"] [class "quiet"] [on click copy]) "copy")))
-  (main ([scroll-end (-> m scroll)])
-    (each [e (-> m entries) (-> m count)] #:key (-> e id) (entry-view e))
-    (when (> (-> m replaying) 0) (p ([class "status"]) "Restoring the session: running the earlier inputs again..."))
-    (when (!= (-> m problem) "") (p ([class "status problem"]) "No session could be started: " (text (-> m problem)))))
-  (footer
-    (textarea ([value (-> m draft)] [rows 3] [spellcheck "false"] [autocapitalize "off"] [autofocus]
-               [placeholder "(define (sq x) (* x x))    Enter to evaluate, Shift+Enter for a new line"]
-               [on input (draft-changed (event value))] [on keydown (key-pressed (event key) (event shift))]
-               [focus (-> m focus)]))
-    (if (busy? m)
-        (button ([class "stop"] [on click stop]) "stop")
-        (button ([on click run]) "run"))))
-
-(app model message init update repl trapped)
+      (button ([class "quiet"] [on click save]) "save")
+      (button ([class "quiet"] [disabled (busy? m)] [on click load]) "load")
+      (button ([class "quiet"] [on click copy]) "copy"))
+    (main ([scroll-end (-> m scroll)])
+      (each [e (-> m entries) (-> m count)] #:key (-> e id) (entry-view e))
+      (when (> (-> m replaying) 0) (p ([class "status"]) "Restoring the session: running the earlier inputs again..."))
+      (when (!= (-> m problem) "") (p ([class "status problem"]) "No session could be started: " (text (-> m problem)))))
+    (footer
+      (textarea ([value (-> m draft)] [rows 3] [spellcheck "false"] [autocapitalize "off"] [autofocus]
+                 [placeholder "(define (sq x) (* x x))    Enter to evaluate, Shift+Enter for a new line"]
+                 [on input (draft-changed (event value))] [on keydown (key-pressed (event key) (event shift))]
+                 [focus (-> m focus)]))
+      (if (busy? m)
+          (button ([class "stop"] [on click stop]) "stop")
+          (button ([on click run]) "run")))))
