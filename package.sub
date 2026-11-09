@@ -1,0 +1,10 @@
+(package repl
+  (version "0.10.0")
+  (substrate "0.10.0")
+  (exports session)
+  (dependencies (web-ui (path "../substrate-web-ui"))
+                (scheme (path "../substrate-scheme"))
+                (bend2 (url "https://github.com/substrate-lang/substrate-bend2/archive/refs/tags/v0.10.0.tar.gz")
+                       (hash "sha256:3509d8b7c67efdc6e703b9dffb288bc833625595f9cb6181e1191d17da24a1d8")))
+  (tests (browser))
+  (sites (repl "repl.sub" (html "index.html"))))
