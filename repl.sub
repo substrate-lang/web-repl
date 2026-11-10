@@ -128,7 +128,6 @@
 
 (define (worker-heard [source u32] [kind u32] [g u32] [tag (ptr void)] [value i32]) (send! (worker-event g kind)))
 
-;; Each worker's events come through a subscription of its own, which the next worker's start ends.
 (define (start-worker! [m (ptr model)])
   (when (> (-> m problem length) 0) (free (-> m problem bytes)))
   (set! (-> m problem) "")
@@ -192,7 +191,6 @@
     (buffer-free! (& form))
     (evaluate-next! m)))
 
-;; A picked file is read through two subscriptions: one for the pick's events, one for the file's stream.
 (define (files-heard [source u32] [kind u32] [id u32] [tag (ptr void)] [value i32]) (send! (file-picked kind value)))
 
 (define (chunk-heard [source u32] [kind u32] [id u32] [tag (ptr void)] [value i32]) (send! (file-read kind value)))
