@@ -6,6 +6,7 @@
 (require-unqualified host/web/storage)
 (require-unqualified host/web/clipboard)
 (require-unqualified host/web/files)
+(require-unqualified std/string)
 
 (provide repl repl-event language-changed)
 
@@ -71,7 +72,7 @@
 
 (define (add-line! [e (ptr entry)] [s string])
   (let ([b (& (-> e output))])
-    (when (and (> (-> b length) 0) (!= (@ (-> b bytes) (- (-> b length) 1)) 10)) (buffer-add-byte! b 10))
+    (when (and (> (-> b length) 0) (!= (@ (-> b bytes) (- (-> b length) 1)) #\newline)) (buffer-add-byte! b #\newline))
     (buffer-add-string! b s)))
 
 (define (add-entry! [m (ptr model)] [input string]) -> u32
@@ -181,8 +182,8 @@
 (define (load-forms! [m (ptr model)] [text string])
   (let ([form (make-buffer)] [n (-> text length)] [start u32 0])
     (for ([i u32 0]) (<= i n) (+= i 1)
-      (when (or (== i n) (== (@ text i) 10))
-        (when (> (-> form length) 0) (buffer-add-byte! (& form) 10))
+      (when (or (== i n) (== (@ text i) #\newline))
+        (when (> (-> form length) 0) (buffer-add-byte! (& form) #\newline))
         (buffer-add-string! (& form) (slice text start i))
         (when (complete? (buffer-string (& form)))
           (queue! m (buffer-string (& form)))
@@ -224,16 +225,16 @@
   (let ([b (make-buffer)])
     (for ([i u32 0]) (< i (-> m count)) (+= i 1)
       (let ([e (+ (-> m entries) i)])
-        (when (> i 0) (buffer-add-byte! (& b) 10))
+        (when (> i 0) (buffer-add-byte! (& b) #\newline))
         (buffer-add-string! (& b) (-> e input))
-        (buffer-add-byte! (& b) 10)
+        (buffer-add-byte! (& b) #\newline)
         (when (and outputs (> (-> e output length) 0))
           (buffer-add-string! (& b) ";; ")
           (for ([j u32 0]) (< j (-> e output length)) (+= j 1)
             (let ([c (@ (-> e output bytes) j)])
               (buffer-add-byte! (& b) c)
-              (when (and (== c 10) (< (+ j 1) (-> e output length))) (buffer-add-string! (& b) ";; "))))
-          (buffer-add-byte! (& b) 10))))
+              (when (and (== c #\newline) (< (+ j 1) (-> e output length))) (buffer-add-string! (& b) ";; "))))
+          (buffer-add-byte! (& b) #\newline))))
     b))
 
 (define (save! [m (ptr model)])
@@ -288,7 +289,7 @@
     (when (> n 1) (add-line! e (cast string (slice (buffer-bytes (& reply)) 1))))
     (set! (-> e failed) (and (> n 0) (!= (@ (-> reply bytes) 0) 0)))
     (set! (-> e running) #f)
-    (when (and (> (-> out length) 0) (== (@ (-> out bytes) (- (-> out length) 1)) 10)) (-= (-> out length) 1))
+    (when (and (> (-> out length) 0) (== (@ (-> out bytes) (- (-> out length) 1)) #\newline)) (-= (-> out length) 1))
     (unless (-> e failed) (remember! m (-> e id) (-> e input)))
     (buffer-free! (& reply))
     (set! (-> m answered) #t)
@@ -341,24 +342,22 @@
   (let ([n (-> s length)] [depth 0] [i u32 0] [some #f])
     (while (< i n)
       (let ([c (@ s i)])
-        (cond [(== c #\;) (while (and (< i n) (!= (@ s i) 10)) (+= i 1)) (continue)]
-              [(== c 34)
+        (cond [(== c #\;) (while (and (< i n) (!= (@ s i) #\newline)) (+= i 1)) (continue)]
+              [(== c #\")
                (+= i 1)
-               (while (and (< i n) (!= (@ s i) 34))
-                 (when (and (== (@ s i) 92) (< (+ i 1) n)) (+= i 1))
+               (while (and (< i n) (!= (@ s i) #\"))
+                 (when (and (== (@ s i) #\\) (< (+ i 1) n)) (+= i 1))
                  (+= i 1))
                (when (>= i n) (return #f))
                (set! some #t)]
-              [(and (== c #\#) (< (+ i 2) n) (== (@ s (+ i 1)) 92)) (+= i 2) (set! some #t)]
+              [(and (== c #\#) (< (+ i 2) n) (== (@ s (+ i 1)) #\\)) (+= i 2) (set! some #t)]
               [(or (== c #\() (== c #\[)) (+= depth 1) (set! some #t)]
               [(or (== c #\)) (== c #\])) (-= depth 1)]
-              [(> c 32) (set! some #t)]))
+              [(> c #\space) (set! some #t)]))
       (+= i 1))
     (and some (<= depth 0))))
 
-(define (one-line? [s string]) -> bool
-  (for ([i u32 0]) (< i (-> s length)) (+= i 1) (when (== (@ s i) 10) (return #f)))
-  #t)
+(define (one-line? [s string]) -> bool (== (string-index s #\newline) (-> s length)))
 
 (define (submit! [m (ptr model)])
   (when (and (complete? (-> m draft)) (not (busy? m)) (!= (-> m session) 0))
@@ -417,7 +416,7 @@
   (let ([b (make-buffer)])
     (buffer-add-string! (& b) "error: ")
     (buffer-add-string! (& b) why)
-    (buffer-add-byte! (& b) 10)
+    (buffer-add-byte! (& b) #\newline)
     (host-write 2 (buffer-bytes (& b)))
     (buffer-free! (& b)))
   (+= (-> m focus) 1))
