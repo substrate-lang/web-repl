@@ -25,7 +25,7 @@
     [else "?language=scheme"]))
 
 (define (page-init [s (ptr page-state)])
-  (let ([url (location-get)])
+  (let ([url (location-href)])
     (set! (-> s language) (language-in url))
     (free (-> url bytes))))
 
