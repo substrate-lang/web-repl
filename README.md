@@ -5,4 +5,4 @@ and two languages built on it, Scheme and Bend 2. Its compiler runs in a worker
 beside the page.
 
     substrate test -A        # the tests, in Chromium
-    substrate site repl      # the page, in build/sites/repl
+    substrate build          # the page, in build/sites/repl
